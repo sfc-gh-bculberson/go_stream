@@ -23,6 +23,5 @@ Values
 
 Dotenv parsing
 - Lines like `KEY=VALUE` are mapped into a ConfigMap
-- Only `JWT` is mapped into a Secret
 
 

@@ -23,7 +23,7 @@ Set required Snowflake info and run the binary. Flags have ENV var equivalents.
 
 Required:
 - ACCOUNT (or -account)
-- JWT (or -jwt) — Snowflake key pair JWT
+- PAT (or -pat) — Snowflake PAT
 - DATABASE (or -database)
 - SCHEMA (or -schema)
 - PIPE (or -pipe)
@@ -37,7 +37,7 @@ Optional:
 Example
 ```bash
 ACCOUNT=acme_xyz \
-JWT="<your_keypair_jwt>" \
+PAT="<your_pat>" \
 DATABASE=MYDB \
 SCHEMA=PUBLIC \
 PIPE=MY_PIPE \
