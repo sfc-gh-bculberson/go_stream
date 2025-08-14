@@ -29,10 +29,10 @@ Required:
 - PIPE (or -pipe)
 
 Optional:
-- EPS (or -eps) — events per second; default 140
-- BATCH (or -batch) — rows batch size; default 100
-- COUNT (or -count) — total events to produce; 0 for infinite; default 100
-- BUFFER (or -buffer) — channel buffer size; default 100
+- EPS (or -eps) — events per second; default 1000
+- BATCH (or -batch) — rows batch size; default 1000
+- COUNT (or -count) — total events to produce; 0 for infinite; default 10000
+- BUFFER (or -buffer) — channel buffer size; default 1000
 
 Example
 ```bash
