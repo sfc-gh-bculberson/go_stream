@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"flag"
@@ -215,7 +216,8 @@ func main() {
 		defer wg.Done()
 		batch := make([]json.RawMessage, 0, batchSize)
 		consumerStart := time.Now()
-		var totalBytesSent int64
+		var totalBytesSent int64             // compressed bytes
+		var totalUncompressedBytesSent int64 // raw (uncompressed) bytes
 		flush := func() {
 			if len(batch) == 0 {
 				return
@@ -238,7 +240,12 @@ func main() {
 			// Use independent context with its own timeout to avoid cancellation during shutdown
 			rowsCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 			defer cancel()
-			req, err := http.NewRequestWithContext(rowsCtx, http.MethodPost, rowsEndpoint, bytes.NewReader([]byte(bodyStr)))
+			// gzip-compress the body
+			var gzBuf bytes.Buffer
+			gzWriter := gzip.NewWriter(&gzBuf)
+			_, _ = gzWriter.Write([]byte(bodyStr))
+			_ = gzWriter.Close()
+			req, err := http.NewRequestWithContext(rowsCtx, http.MethodPost, rowsEndpoint, bytes.NewReader(gzBuf.Bytes()))
 			if err != nil {
 				log.Printf("request build error: %v", err)
 				return
@@ -247,6 +254,7 @@ func main() {
 			req.Header.Set("Authorization", "Bearer "+jwtToken)
 			req.Header.Set("X-Snowflake-Authorization-Token-Type", "KEYPAIR_JWT")
 			req.Header.Set("Accept", "application/json")
+			req.Header.Set("Content-Encoding", "gzip")
 			resp, err := rowsClient.Do(req)
 			if err != nil {
 				log.Printf("rows POST error: %v", err)
@@ -266,14 +274,18 @@ func main() {
 				continuationToken = rr.NextContinuationToken
 				tokenMu.Unlock()
 			}
-			totalBytesSent += int64(len(bodyStr))
+			totalBytesSent += int64(gzBuf.Len())
+			totalUncompressedBytesSent += int64(len(bodyStr))
 			elapsedSeconds := time.Since(consumerStart).Seconds()
-			totalMB := float64(totalBytesSent) / (1024.0 * 1024.0)
-			mbPerSec := 0.0
+			totalMBCompressed := float64(totalBytesSent) / (1024.0 * 1024.0)
+			totalMBUncompressed := float64(totalUncompressedBytesSent) / (1024.0 * 1024.0)
+			mbPerSecCompressed := 0.0
+			mbPerSecUncompressed := 0.0
 			if elapsedSeconds > 0 {
-				mbPerSec = totalMB / elapsedSeconds
+				mbPerSecCompressed = totalMBCompressed / elapsedSeconds
+				mbPerSecUncompressed = totalMBUncompressed / elapsedSeconds
 			}
-			log.Printf("sent events=%d totalMB=%.3f seconds=%.1f MB/sec=%.3f", len(batch), totalMB, elapsedSeconds, mbPerSec)
+			log.Printf("sent events=%d totalMB_uncompressed=%.3f totalMB_compressed=%.3f seconds=%.1f MB/sec_uncompressed=%.3f MB/sec_compressed=%.3f", len(batch), totalMBUncompressed, totalMBCompressed, elapsedSeconds, mbPerSecUncompressed, mbPerSecCompressed)
 			batch = batch[:0]
 		}
 		for event := range events {
