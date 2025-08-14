@@ -96,3 +96,8 @@ envsubst < charts/go-stream/values.from-env.tpl.yaml > charts/go-stream/values.y
 ```bash
 helm upgrade --install go-stream ./charts/go-stream
 ```
+
+2) Uninstall:
+```bash
+helm uninstall go-stream
+```
