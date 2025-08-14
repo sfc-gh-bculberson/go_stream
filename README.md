@@ -83,3 +83,16 @@ Credits
 - Fake data via `github.com/go-faker/faker/v4`
 
 
+Deploy to Kubernetes
+--------------------
+
+Using Helm chart in `charts/go-stream`.
+
+1) Prepare values from your shell env.
+```bash
+envsubst < charts/go-stream/values.from-env.tpl.yaml > charts/go-stream/values.yaml
+```
+2) Install/upgrade:
+```bash
+helm upgrade --install go-stream ./charts/go-stream
+```

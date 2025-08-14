@@ -1,0 +1,7 @@
+apiVersion: v2
+name: go-stream
+description: Deploys the go_stream app that streams fake lift tickets to Snowflake
+type: application
+version: 0.1.0
+appVersion: 0.1.0
+

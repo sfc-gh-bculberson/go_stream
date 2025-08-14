@@ -214,6 +214,8 @@ func main() {
 	go func() {
 		defer wg.Done()
 		batch := make([]json.RawMessage, 0, batchSize)
+		consumerStart := time.Now()
+		var totalBytesSent int64
 		flush := func() {
 			if len(batch) == 0 {
 				return
@@ -232,7 +234,6 @@ func main() {
 				sb.WriteByte('\n')
 			}
 			bodyStr := sb.String()
-			log.Printf("rows body: %s", bodyStr)
 			rowsEndpoint := rowsURL + "?continuationToken=" + url.QueryEscape(ct)
 			// Use independent context with its own timeout to avoid cancellation during shutdown
 			rowsCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
@@ -265,7 +266,14 @@ func main() {
 				continuationToken = rr.NextContinuationToken
 				tokenMu.Unlock()
 			}
-			log.Printf("sent batch size=%d", len(batch))
+			totalBytesSent += int64(len(bodyStr))
+			elapsedSeconds := time.Since(consumerStart).Seconds()
+			totalMB := float64(totalBytesSent) / (1024.0 * 1024.0)
+			mbPerSec := 0.0
+			if elapsedSeconds > 0 {
+				mbPerSec = totalMB / elapsedSeconds
+			}
+			log.Printf("sent events=%d totalMB=%.3f seconds=%.1f MB/sec=%.3f", len(batch), totalMB, elapsedSeconds, mbPerSec)
 			batch = batch[:0]
 		}
 		for event := range events {
@@ -274,7 +282,6 @@ func main() {
 				log.Printf("marshal error: %v", err)
 				continue
 			}
-			// log.Printf("event: %s", string(payload))
 			batch = append(batch, json.RawMessage(payload))
 			if len(batch) >= batchSize {
 				flush()

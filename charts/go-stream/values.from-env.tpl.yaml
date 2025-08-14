@@ -1,0 +1,35 @@
+image:
+  repository: 690944315170.dkr.ecr.us-west-2.amazonaws.com/go_stream
+  tag: latest
+  pullPolicy: Always
+
+replicaCount: 1
+
+# Injected into ConfigMap
+env:
+  ACCOUNT: ${ACCOUNT}
+  DATABASE: ${DATABASE}
+  SCHEMA: ${SCHEMA}
+  PIPE: ${PIPE}
+  JWT: ${JWT}
+  
+container:
+  eps: 140
+  batch: 100
+  count: 100000
+  buffer: 100
+
+serviceAccount:
+  create: true
+  name: ""
+
+affinity:
+  nodeAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: NodeType
+              operator: In
+              values:
+                - ssv2test
+
