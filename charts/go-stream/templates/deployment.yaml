@@ -41,7 +41,6 @@ spec:
         - name: go-stream
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
-          command: ["/app/go_stream"]
           args:
             - "-eps={{ .Values.container.eps }}"
             - "-batch={{ .Values.container.batch }}"

@@ -11,13 +11,21 @@ env:
   DATABASE: ${DATABASE}
   SCHEMA: ${SCHEMA}
   PIPE: ${PIPE}
-  JWT: ${JWT}
+  PAT: ${PAT}
   
 container:
-  eps: 3000
+  eps: 4000
   batch: 1000
   count: 0
   buffer: 1000
+
+resources:
+  limits:
+    cpu: 4000m
+    memory: 8000Mi
+  requests:
+    cpu: 4000m
+    memory: 8000Mi
 
 serviceAccount:
   create: true

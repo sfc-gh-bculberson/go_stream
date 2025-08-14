@@ -83,7 +83,7 @@ type openChannelResponse struct {
 func main() {
 	var (
 		account      string
-		jwtToken     string
+		patToken     string
 		databaseName string
 		schemaName   string
 		pipeName     string
@@ -94,7 +94,7 @@ func main() {
 	)
 
 	flag.StringVar(&account, "account", envOr("ACCOUNT", ""), "Snowflake account name (or ACCOUNT env)")
-	flag.StringVar(&jwtToken, "jwt", envOr("JWT", ""), "Snowflake KEYPAIR JWT (or JWT env)")
+	flag.StringVar(&patToken, "pat", envOr("PAT", ""), "Snowflake PAT (or PAT env)")
 	flag.StringVar(&databaseName, "database", envOr("DATABASE", ""), "Snowflake database name (or DATABASE env)")
 	flag.StringVar(&schemaName, "schema", envOr("SCHEMA", ""), "Snowflake schema name (or SCHEMA env)")
 	flag.StringVar(&pipeName, "pipe", envOr("PIPE", ""), "Snowflake pipe name (or PIPE env)")
@@ -104,8 +104,19 @@ func main() {
 	flag.Float64Var(&eps, "eps", envOrFloat("EPS", 1000), "Events per second")
 	flag.Parse()
 
-	if account == "" || jwtToken == "" || databaseName == "" || schemaName == "" || pipeName == "" {
-		log.Fatal("missing required flags: -account, -jwt, -database, -schema, -pipe (or corresponding env vars)")
+	// Print effective configuration after flags/env processing (mask PAT)
+	maskedPAT := patToken
+	if maskedPAT != "" {
+		if len(maskedPAT) > 8 {
+			maskedPAT = maskedPAT[:4] + "..." + maskedPAT[len(maskedPAT)-4:]
+		} else {
+			maskedPAT = "****"
+		}
+	}
+	log.Printf("config account=%s database=%s schema=%s pipe=%s batch=%d count=%d buffer=%d eps=%.2f pat=%s", account, databaseName, schemaName, pipeName, batchSize, count, bufferSize, eps, maskedPAT)
+
+	if account == "" || patToken == "" || databaseName == "" || schemaName == "" || pipeName == "" {
+		log.Fatal("missing required flags: -account, -pat, -database, -schema, -pipe (or corresponding env vars)")
 	}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -124,8 +135,8 @@ func main() {
 	if err != nil {
 		log.Fatalf("build control request: %v", err)
 	}
-	req.Header.Set("Authorization", "Bearer "+jwtToken)
-	req.Header.Set("X-Snowflake-Authorization-Token-Type", "KEYPAIR_JWT")
+	req.Header.Set("Authorization", "Bearer "+patToken)
+	req.Header.Set("X-Snowflake-Authorization-Token-Type", "PROGRAMMATIC_ACCESS_TOKEN")
 	req.Header.Set("Accept", "application/json")
 	resp, err := client.Do(req)
 	if err != nil {
@@ -181,8 +192,8 @@ func main() {
 	if err != nil {
 		log.Fatalf("build open channel request: %v", err)
 	}
-	openReq.Header.Set("Authorization", "Bearer "+jwtToken)
-	openReq.Header.Set("X-Snowflake-Authorization-Token-Type", "KEYPAIR_JWT")
+	openReq.Header.Set("Authorization", "Bearer "+patToken)
+	openReq.Header.Set("X-Snowflake-Authorization-Token-Type", "PROGRAMMATIC_ACCESS_TOKEN")
 	openReq.Header.Set("Content-Type", "application/json")
 	openReq.Header.Set("Accept", "application/json")
 	openResp, err := client.Do(openReq)
@@ -233,8 +244,8 @@ func main() {
 		if e != nil {
 			return "", "", "", "", e
 		}
-		req.Header.Set("Authorization", "Bearer "+jwtToken)
-		req.Header.Set("X-Snowflake-Authorization-Token-Type", "KEYPAIR_JWT")
+		req.Header.Set("Authorization", "Bearer "+patToken)
+		req.Header.Set("X-Snowflake-Authorization-Token-Type", "PROGRAMMATIC_ACCESS_TOKEN")
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Accept", "application/json")
 		resp, e := client.Do(req)
@@ -283,8 +294,8 @@ func main() {
 		if err != nil {
 			return
 		}
-		dreq.Header.Set("Authorization", "Bearer "+jwtToken)
-		dreq.Header.Set("X-Snowflake-Authorization-Token-Type", "KEYPAIR_JWT")
+		dreq.Header.Set("Authorization", "Bearer "+patToken)
+		dreq.Header.Set("X-Snowflake-Authorization-Token-Type", "PROGRAMMATIC_ACCESS_TOKEN")
 		dreq.Header.Set("Accept", "application/json")
 		dresp, err := client.Do(dreq)
 		if err == nil {
@@ -316,8 +327,8 @@ func main() {
 					continue
 				}
 				r.Header.Set("Content-Type", "application/json")
-				r.Header.Set("Authorization", "Bearer "+jwtToken)
-				r.Header.Set("X-Snowflake-Authorization-Token-Type", "KEYPAIR_JWT")
+				r.Header.Set("Authorization", "Bearer "+patToken)
+				r.Header.Set("X-Snowflake-Authorization-Token-Type", "PROGRAMMATIC_ACCESS_TOKEN")
 				r.Header.Set("Accept", "application/json")
 				resp, err := client.Do(r)
 				if err != nil {
@@ -401,8 +412,8 @@ func main() {
 				return
 			}
 			req.Header.Set("Content-Type", "application/json")
-			req.Header.Set("Authorization", "Bearer "+jwtToken)
-			req.Header.Set("X-Snowflake-Authorization-Token-Type", "KEYPAIR_JWT")
+			req.Header.Set("Authorization", "Bearer "+patToken)
+			req.Header.Set("X-Snowflake-Authorization-Token-Type", "PROGRAMMATIC_ACCESS_TOKEN")
 			req.Header.Set("Accept", "application/json")
 			req.Header.Set("Content-Encoding", "gzip")
 			resp, err := rowsClient.Do(req)
