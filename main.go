@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -50,8 +51,33 @@ type LiftTicket struct {
 
 // rows POST body is line-delimited JSON objects; continuationToken is passed via querystring
 
+type bulkStatusRequest struct {
+	ChannelNames []string `json:"channel_names"`
+}
+
+type channelStatus struct {
+	ChannelStatusCode               string `json:"channel_status_code"`
+	LastCommittedOffsetToken        string `json:"last_committed_offset_token"`
+	DatabaseName                    string `json:"database_name"`
+	SchemaName                      string `json:"schema_name"`
+	PipeName                        string `json:"pipe_name"`
+	ChannelName                     string `json:"channel_name"`
+	RowsInserted                    int64  `json:"rows_inserted"`
+	RowsParsed                      int64  `json:"rows_parsed"`
+	RowsErrors                      int64  `json:"rows_errors"`
+	LastErrorOffsetUpperBound       string `json:"last_error_offset_upper_bound"`
+	LastErrorMessage                string `json:"last_error_message"`
+	LastErrorTimestamp              string `json:"last_error_timestamp"`
+	SnowflakeAvgProcessingLatencyMs int64  `json:"snowflake_avg_processing_latency_ms"`
+}
+
+type bulkStatusResponse struct {
+	ChannelStatuses map[string]channelStatus `json:"channel_statuses"`
+}
+
 type openChannelResponse struct {
-	NextContinuationToken string `json:"next_continuation_token"`
+	NextContinuationToken string        `json:"next_continuation_token"`
+	ChannelStatus         channelStatus `json:"channel_status"`
 }
 
 func main() {
@@ -72,10 +98,10 @@ func main() {
 	flag.StringVar(&databaseName, "database", envOr("DATABASE", ""), "Snowflake database name (or DATABASE env)")
 	flag.StringVar(&schemaName, "schema", envOr("SCHEMA", ""), "Snowflake schema name (or SCHEMA env)")
 	flag.StringVar(&pipeName, "pipe", envOr("PIPE", ""), "Snowflake pipe name (or PIPE env)")
-	flag.IntVar(&batchSize, "batch", envOrInt("BATCH", 100), "Batch size for rows requests")
-	flag.IntVar(&count, "count", envOrInt("COUNT", 100), "Number of events to generate; 0 or negative for infinite")
-	flag.IntVar(&bufferSize, "buffer", envOrInt("BUFFER", 100), "Buffered channel size")
-	flag.Float64Var(&eps, "eps", envOrFloat("EPS", 140), "Events per second")
+	flag.IntVar(&batchSize, "batch", envOrInt("BATCH", 1000), "Batch size for rows requests")
+	flag.IntVar(&count, "count", envOrInt("COUNT", 10000), "Number of events to generate; 0 or negative for infinite")
+	flag.IntVar(&bufferSize, "buffer", envOrInt("BUFFER", 1000), "Buffered channel size")
+	flag.Float64Var(&eps, "eps", envOrFloat("EPS", 1000), "Events per second")
 	flag.Parse()
 
 	if account == "" || jwtToken == "" || databaseName == "" || schemaName == "" || pipeName == "" {
@@ -146,7 +172,12 @@ func main() {
 	log.Printf("control_host=%s ingest_host=%s channel=%s", controlHost, ingestHost, chanName)
 
 	// Open channel (PUT) and get initial continuation token
-	openReq, err := http.NewRequestWithContext(ctx, http.MethodPut, channelURL, bytes.NewReader([]byte("{}")))
+	// Append requestId per spec
+	uOpen, _ := url.Parse(channelURL)
+	qOpen := uOpen.Query()
+	qOpen.Set("requestId", uuid.NewString())
+	uOpen.RawQuery = qOpen.Encode()
+	openReq, err := http.NewRequestWithContext(ctx, http.MethodPut, uOpen.String(), bytes.NewReader([]byte("{}")))
 	if err != nil {
 		log.Fatalf("build open channel request: %v", err)
 	}
@@ -183,31 +214,148 @@ func main() {
 		url.PathEscape(chanName),
 	)
 
-	// Ensure channel is closed on exit or error
-	defer func() {
-		// Use a fresh context independent of main ctx to allow cleanup after cancel
+	// Helpers to (re)open and close channels
+	openChannel := func() (newChanName, newChannelURL, newRowsURL, newToken string, err error) {
+		name := strings.ReplaceAll(uuid.NewString(), "-", "")
+		chURL := fmt.Sprintf(
+			"https://%s/v2/streaming/databases/%s/schemas/%s/pipes/%s/channels/%s",
+			ingestHost,
+			url.PathEscape(databaseName),
+			url.PathEscape(schemaName),
+			url.PathEscape(pipeName),
+			url.PathEscape(name),
+		)
+		u, _ := url.Parse(chURL)
+		q := u.Query()
+		q.Set("requestId", uuid.NewString())
+		u.RawQuery = q.Encode()
+		req, e := http.NewRequestWithContext(ctx, http.MethodPut, u.String(), bytes.NewReader([]byte("{}")))
+		if e != nil {
+			return "", "", "", "", e
+		}
+		req.Header.Set("Authorization", "Bearer "+jwtToken)
+		req.Header.Set("X-Snowflake-Authorization-Token-Type", "KEYPAIR_JWT")
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "application/json")
+		resp, e := client.Do(req)
+		if e != nil {
+			return "", "", "", "", e
+		}
+		body, _ := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			return "", "", "", "", fmt.Errorf("open channel non-2xx: %s body=%s", resp.Status, string(body))
+		}
+		var oc2 openChannelResponse
+		if e := json.Unmarshal(body, &oc2); e != nil {
+			return "", "", "", "", e
+		}
+		if oc2.NextContinuationToken == "" {
+			return "", "", "", "", fmt.Errorf("missing continuation token")
+		}
+		rows := fmt.Sprintf(
+			"https://%s/v2/streaming/data/databases/%s/schemas/%s/pipes/%s/channels/%s/rows",
+			ingestHost,
+			url.PathEscape(databaseName),
+			url.PathEscape(schemaName),
+			url.PathEscape(pipeName),
+			url.PathEscape(name),
+		)
+		return name, chURL, rows, oc2.NextContinuationToken, nil
+	}
+
+	// Drop Channel per spec with optional requestId
+	closeChannel := func(chURL string) {
+		if chURL == "" {
+			return
+		}
 		dctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		dreq, err := http.NewRequestWithContext(dctx, http.MethodDelete, channelURL, nil)
+		// Append requestId query parameter
+		u, err := url.Parse(chURL)
 		if err != nil {
-			log.Printf("build channel delete request error: %v", err)
+			return
+		}
+		q := u.Query()
+		q.Set("requestId", uuid.NewString())
+		u.RawQuery = q.Encode()
+		dreq, err := http.NewRequestWithContext(dctx, http.MethodDelete, u.String(), nil)
+		if err != nil {
 			return
 		}
 		dreq.Header.Set("Authorization", "Bearer "+jwtToken)
 		dreq.Header.Set("X-Snowflake-Authorization-Token-Type", "KEYPAIR_JWT")
 		dreq.Header.Set("Accept", "application/json")
 		dresp, err := client.Do(dreq)
-		if err != nil {
-			log.Printf("channel delete error: %v", err)
-			return
+		if err == nil {
+			_ = dresp.Body.Close()
 		}
-		b, _ := io.ReadAll(dresp.Body)
-		_ = dresp.Body.Close()
-		if dresp.StatusCode < 200 || dresp.StatusCode >= 300 {
-			log.Printf("channel delete non-2xx: %s body=%s", dresp.Status, string(b))
-			return
+	}
+
+	// Monitor goroutine: poll bulk-channel-status every 5s
+	monitorURL := fmt.Sprintf(
+		"https://%s/v2/streaming/databases/%s/schemas/%s/pipes/%s:bulk-channel-status",
+		ingestHost,
+		url.PathEscape(databaseName),
+		url.PathEscape(schemaName),
+		url.PathEscape(pipeName),
+	)
+	go func() {
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				reqBody := bulkStatusRequest{ChannelNames: []string{chanName}}
+				b, _ := json.Marshal(reqBody)
+				r, err := http.NewRequestWithContext(ctx, http.MethodPost, monitorURL, bytes.NewReader(b))
+				if err != nil {
+					log.Printf("status request build error: %v", err)
+					continue
+				}
+				r.Header.Set("Content-Type", "application/json")
+				r.Header.Set("Authorization", "Bearer "+jwtToken)
+				r.Header.Set("X-Snowflake-Authorization-Token-Type", "KEYPAIR_JWT")
+				r.Header.Set("Accept", "application/json")
+				resp, err := client.Do(r)
+				if err != nil {
+					log.Printf("status request error: %v", err)
+					continue
+				}
+				data, _ := io.ReadAll(resp.Body)
+				_ = resp.Body.Close()
+				if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+					log.Printf("status non-2xx: %s body=%s", resp.Status, string(data))
+					continue
+				}
+				var s bulkStatusResponse
+				if err := json.Unmarshal(data, &s); err != nil {
+					log.Printf("status parse error: %v body=%s", err, string(data))
+					continue
+				}
+				if cs, ok := s.ChannelStatuses[chanName]; ok {
+					lagMs := int64(-1)
+					if cs.LastCommittedOffsetToken != "" {
+						if tokenMs, err := strconv.ParseInt(cs.LastCommittedOffsetToken, 10, 64); err == nil {
+							lagMs = time.Now().UnixMilli() - tokenMs
+						} else {
+							log.Printf("status channel=%s last_commit_parse_error=%v raw=%q", chanName, err, cs.LastCommittedOffsetToken)
+						}
+					}
+					log.Printf("status channel=%s code=%s rows_inserted=%d rows_parsed=%d rows_errors=%d last_commit=%s latency_ms=%d lag_ms=%d", cs.ChannelName, cs.ChannelStatusCode, cs.RowsInserted, cs.RowsParsed, cs.RowsErrors, cs.LastCommittedOffsetToken, cs.SnowflakeAvgProcessingLatencyMs, lagMs)
+				} else {
+					log.Printf("status channel=%s not found in response", chanName)
+				}
+			}
 		}
-		log.Printf("channel deleted successfully")
+	}()
+
+	// Ensure channel is closed on exit only
+	defer func() {
+		closeChannel(channelURL)
+		log.Printf("channel delete attempted on exit")
 	}()
 
 	// Consumer goroutine: send events to rows endpoint in batches
@@ -216,6 +364,7 @@ func main() {
 		defer wg.Done()
 		batch := make([]json.RawMessage, 0, batchSize)
 		consumerStart := time.Now()
+		lastReport := consumerStart
 		var totalBytesSent int64             // compressed bytes
 		var totalUncompressedBytesSent int64 // raw (uncompressed) bytes
 		flush := func() {
@@ -236,7 +385,8 @@ func main() {
 				sb.WriteByte('\n')
 			}
 			bodyStr := sb.String()
-			rowsEndpoint := rowsURL + "?continuationToken=" + url.QueryEscape(ct)
+			nowMs := time.Now().UnixMilli()
+			rowsEndpoint := rowsURL + "?continuationToken=" + url.QueryEscape(ct) + "&offsetToken=" + strconv.FormatInt(nowMs, 10) + "&requestId=" + url.QueryEscape(uuid.NewString())
 			// Use independent context with its own timeout to avoid cancellation during shutdown
 			rowsCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 			defer cancel()
@@ -257,13 +407,27 @@ func main() {
 			req.Header.Set("Content-Encoding", "gzip")
 			resp, err := rowsClient.Do(req)
 			if err != nil {
-				log.Printf("rows POST error: %v", err)
+				log.Printf("rows POST error: %v -- reopening channel", err)
+				var e error
+				chanName, channelURL, rowsURL, continuationToken, e = openChannel()
+				if e != nil {
+					log.Printf("reopen channel failed: %v", e)
+					return
+				}
+				log.Printf("reopened channel=%s", chanName)
 				return
 			}
 			respBody, _ := io.ReadAll(resp.Body)
 			_ = resp.Body.Close()
 			if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-				log.Printf("rows non-2xx response: %s body=%s", resp.Status, string(respBody))
+				log.Printf("rows non-2xx response: %s body=%s -- reopening channel", resp.Status, string(respBody))
+				var e error
+				chanName, channelURL, rowsURL, continuationToken, e = openChannel()
+				if e != nil {
+					log.Printf("reopen channel failed: %v", e)
+					return
+				}
+				log.Printf("reopened channel=%s", chanName)
 				return
 			}
 			var rr struct {
@@ -285,7 +449,10 @@ func main() {
 				mbPerSecCompressed = totalMBCompressed / elapsedSeconds
 				mbPerSecUncompressed = totalMBUncompressed / elapsedSeconds
 			}
-			log.Printf("sent events=%d totalMB_uncompressed=%.3f totalMB_compressed=%.3f seconds=%.1f MB/sec_uncompressed=%.3f MB/sec_compressed=%.3f", len(batch), totalMBUncompressed, totalMBCompressed, elapsedSeconds, mbPerSecUncompressed, mbPerSecCompressed)
+			if time.Since(lastReport) >= 5*time.Second {
+				log.Printf("throughput totalMB_uncompressed=%.3f totalMB_compressed=%.3f seconds=%.1f MB/sec_uncompressed=%.3f MB/sec_compressed=%.3f", totalMBUncompressed, totalMBCompressed, elapsedSeconds, mbPerSecUncompressed, mbPerSecCompressed)
+				lastReport = time.Now()
+			}
 			batch = batch[:0]
 		}
 		for event := range events {

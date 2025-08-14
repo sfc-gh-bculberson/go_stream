@@ -14,10 +14,10 @@ env:
   JWT: ${JWT}
   
 container:
-  eps: 140
-  batch: 100
-  count: 100000
-  buffer: 100
+  eps: 3000
+  batch: 1000
+  count: 0
+  buffer: 1000
 
 serviceAccount:
   create: true
