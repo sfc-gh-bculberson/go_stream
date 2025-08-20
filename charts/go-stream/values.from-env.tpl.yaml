@@ -12,9 +12,10 @@ env:
   SCHEMA: ${SCHEMA}
   PIPE: ${PIPE}
   PAT: ${PAT}
+  GZIP: ${GZIP}
   
 container:
-  eps: 4000
+  eps: 16000
   batch: 1000
   count: 0
   buffer: 1000

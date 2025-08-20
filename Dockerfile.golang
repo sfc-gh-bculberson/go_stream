@@ -7,4 +7,6 @@ RUN go mod verify
 
 RUN go build -o go_stream .
 
+EXPOSE 6060
+
 ENTRYPOINT ["/app/go_stream"]
