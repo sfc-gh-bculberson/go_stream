@@ -13,6 +13,28 @@ Features
 Requirements
 - Go 1.22+ installed
 
+Snowflake Setup
+
+```sql
+
+CREATE OR REPLACE TABLE LIFT_TICKETS_SSV2
+(TXID varchar(255), RFID varchar(255), RESORT varchar(255), PURCHASE_TIME datetime, EXPIRATION_TIME date, DAYS number, NAME varchar(255), ADDRESS variant, PHONE varchar(255), EMAIL varchar(255), EMERGENCY_CONTACT variant, EVENT_TS NUMBER) 
+CLUSTER BY (date_trunc(day, PURCHASE_TIME), RESORT);
+
+CREATE OR REPLACE PIPE LIFT_TICKETS_PIPE
+AS
+   COPY INTO LIFT_TICKETS_SSV2
+   FROM TABLE (
+         DATA_SOURCE (
+         TYPE => 'STREAMING'
+         )
+   )
+   MATCH_BY_COLUMN_NAME=CASE_SENSITIVE
+   CLUSTER_AT_INGEST_TIME=FALSE
+;
+```
+
+
 Build
 ```bash
 go build
