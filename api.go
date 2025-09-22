@@ -44,7 +44,7 @@ type openChannelResponse struct {
 }
 
 func resolveIngestHost(ctx context.Context, client *http.Client, account, patToken string) (string, error) {
-	controlHost := account + ".snowflakecomputing.com"
+	controlHost := account + ".us-west-2.privatelink.snowflakecomputing.com"
 	controlURL := "https://" + controlHost + "/v2/streaming/hostname"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, controlURL, nil)
 	if err != nil {
@@ -95,6 +95,7 @@ func openChannel(ctx context.Context, client *http.Client, patToken, ingestHost,
 	req.Header.Set("Accept", "application/json")
 	resp, err := client.Do(req)
 	if err != nil {
+		fmt.Println("Error with request:", err)
 		return oc, "", "", err
 	}
 	body, _ := io.ReadAll(resp.Body)
