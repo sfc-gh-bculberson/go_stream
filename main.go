@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"math/rand"
 	"net/http"
 	"os"
 	"os/signal"
@@ -28,6 +29,27 @@ func MaxParallelism() int {
 		return maxProcs
 	}
 	return numCPU
+}
+
+// loggingRoundTripper logs HTTP method, URL, status, and duration for each request.
+type loggingRoundTripper struct {
+	base http.RoundTripper
+}
+
+func (l loggingRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	start := time.Now()
+	resp, err := l.base.RoundTrip(req)
+	dur := time.Since(start)
+	urlStr := req.URL.String()
+	if len(urlStr) > 75 {
+		urlStr = urlStr[:75] + "..."
+	}
+	if err != nil {
+		log.Printf("http %s %s error=%v dur=%s", req.Method, urlStr, err, dur)
+		return nil, err
+	}
+	log.Printf("http %s %s status=%d dur=%s", req.Method, urlStr, resp.StatusCode, dur)
+	return resp, nil
 }
 
 func main() {
@@ -90,33 +112,65 @@ func main() {
 		TLSHandshakeTimeout:   10 * time.Second,
 		ExpectContinueTimeout: 1 * time.Second,
 	}
-	client := &http.Client{Transport: transport, Timeout: 10 * time.Second}
-	rowsClient := &http.Client{Transport: transport, Timeout: 60 * time.Second}
+	loggingTransport := &loggingRoundTripper{base: transport}
+	client := &http.Client{Transport: loggingTransport, Timeout: 30 * time.Second}
+	rowsClient := &http.Client{Transport: loggingTransport, Timeout: 60 * time.Second}
 
-	// Resolve ingest host via helper
-	ingestHost, err := resolveIngestHost(ctx, client, account, patToken)
-	if err != nil {
-		log.Fatalf("resolve ingest host failed: %v", err)
+	// Resolve ingest host via helper with retry
+	rngStart := rand.New(rand.NewSource(time.Now().UnixNano()))
+	maxBackoff := 5 * time.Minute
+	backoff := 1 * time.Second
+	var ingestHost string
+	for {
+		var err error
+		ingestHost, err = resolveIngestHost(ctx, client, account, patToken)
+		if err == nil {
+			break
+		}
+		log.Printf("resolve ingest host failed: %v -- retrying", err)
+		sleep := time.Duration((0.5 + rngStart.Float64()) * float64(backoff))
+		if sleep > maxBackoff {
+			sleep = maxBackoff
+		}
+		time.Sleep(sleep)
+		backoff *= 2
+		if backoff > maxBackoff {
+			backoff = maxBackoff
+		}
 	}
-	if ingestHost == "" {
-		log.Fatal("could not resolve ingest host from control response")
-	} else {
-		log.Printf("ingest host: %s", ingestHost)
-	}
+	log.Printf("ingest host: %s", ingestHost)
 
 	// Create channel name and final ingest endpoint
 	chanName := strings.ReplaceAll(uuid.NewString(), "-", "")
-	// Open channel via helper
-	oc, channelURL, rowsURL, err := openChannel(ctx, client, patToken, ingestHost, databaseName, schemaName, pipeName, chanName)
-	if err != nil {
-		log.Fatalf("open channel failed: %v", err)
+	// Open channel via helper with retry
+	backoff = 1 * time.Second
+	var channelURL string
+	var rowsURL string
+	var continuationToken string
+	for {
+		oc2, cu, ru, err := openChannel(ctx, client, patToken, ingestHost, databaseName, schemaName, pipeName, chanName)
+		if err == nil {
+			channelURL = cu
+			rowsURL = ru
+			continuationToken = oc2.NextContinuationToken
+			break
+		}
+		log.Printf("open channel failed: %v -- retrying", err)
+		sleep := time.Duration((0.5 + rngStart.Float64()) * float64(backoff))
+		if sleep > maxBackoff {
+			sleep = maxBackoff
+		}
+		time.Sleep(sleep)
+		backoff *= 2
+		if backoff > maxBackoff {
+			backoff = maxBackoff
+		}
 	}
-	continuationToken := oc.NextContinuationToken
 	log.Printf("channel opened, continuationToken=%s", continuationToken)
 
-	// Monitor goroutine: poll bulk-channel-status every 5s
+	// Monitor goroutine: poll bulk-channel-status every 10s
 	go func() {
-		ticker := time.NewTicker(5 * time.Second)
+		ticker := time.NewTicker(10 * time.Second)
 		defer ticker.Stop()
 		for {
 			select {
@@ -138,6 +192,16 @@ func main() {
 						}
 					}
 					log.Printf("status channel=%s code=%s rows_inserted=%d rows_parsed=%d rows_errors=%d last_commit=%s latency_ms=%d lag_ms=%d", cs.ChannelName, cs.ChannelStatusCode, cs.RowsInserted, cs.RowsParsed, cs.RowsErrors, cs.LastCommittedOffsetToken, cs.SnowflakeAvgProcessingLatencyMs, lagMs)
+					if cs.ChannelStatusCode == "ERR_CHANNEL_HAS_INVALID_ROW_SEQUENCER" {
+						log.Printf("status channel=%s has invalid row sequencer -- reopening channel", chanName)
+						oc2, _, _, e := openChannel(ctx, client, patToken, ingestHost, databaseName, schemaName, pipeName, chanName)
+						if e != nil {
+							log.Printf("reopen channel failed: %v", e)
+						} else {
+							continuationToken = oc2.NextContinuationToken
+							log.Printf("reopened channel=%s", chanName)
+						}
+					}
 				} else {
 					log.Printf("status channel=%s not found in response", chanName)
 				}
@@ -163,11 +227,11 @@ func main() {
 		lastReport := consumerStart
 		var totalBytesSent int64             // compressed bytes
 		var totalUncompressedBytesSent int64 // raw (uncompressed) bytes
+		rng := rand.New(rand.NewSource(time.Now().UnixNano()))
 		flush := func() {
 			if len(batch) == 0 {
 				return
 			}
-			ct := continuationToken
 			var sb strings.Builder
 			for i := range batch {
 				sb.Write(batch[i])
@@ -177,17 +241,39 @@ func main() {
 			nowMs := time.Now().UnixMilli()
 			rowsCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 			defer cancel()
-			nextCT, status, _, compressedLen, err := appendRows(rowsCtx, rowsClient, patToken, rowsURL, ct, nowMs, uuid.NewString(), []byte(bodyStr), useGzip)
+			nextCT, status, _, compressedLen, err := appendRows(rowsCtx, rowsClient, patToken, rowsURL, continuationToken, nowMs, uuid.NewString(), []byte(bodyStr), useGzip)
 			if err != nil {
-				log.Printf("rows POST error: status=%d err=%v -- reopening channel", status, err)
-				oc2, _, _, e := openChannel(ctx, client, patToken, ingestHost, databaseName, schemaName, pipeName, chanName)
-				if e != nil {
-					log.Printf("reopen channel failed: %v", e)
-					return
+				if status == 400 {
+					log.Printf("rows POST error: status=%d err=%v -- reopening channel", status, err)
+					oc2, _, _, e := openChannel(ctx, client, patToken, ingestHost, databaseName, schemaName, pipeName, chanName)
+					if e != nil {
+						log.Printf("reopen channel failed: %v", e)
+						return
+					}
+					continuationToken = oc2.NextContinuationToken
+					log.Printf("reopened channel=%s", chanName)
+					status = 0
 				}
-				continuationToken = oc2.NextContinuationToken
-				log.Printf("reopened channel=%s", chanName)
-				return
+				log.Printf("rows POST error: status=%d err=%v -- retrying", status, err)
+				rowsBackoff := 1
+				for {
+					nextCT, status, _, compressedLen, err = appendRows(rowsCtx, rowsClient, patToken, rowsURL, continuationToken, nowMs, uuid.NewString(), []byte(bodyStr), useGzip)
+					if err == nil {
+						break
+					}
+					log.Printf("rows POST error: status=%d err=%v -- retrying", status, err)
+					base := time.Duration(rowsBackoff) * time.Second
+					jitter := 0.5 + rng.Float64() // 50%-150% jitter
+					sleep := time.Duration(jitter * float64(base))
+					if sleep > 5*time.Minute {
+						sleep = 5 * time.Minute
+					}
+					time.Sleep(sleep)
+					rowsBackoff *= 2
+					if rowsBackoff > 300 { // cap at 5 minutes
+						rowsBackoff = 300
+					}
+				}
 			}
 			continuationToken = nextCT
 			totalBytesSent += int64(compressedLen)

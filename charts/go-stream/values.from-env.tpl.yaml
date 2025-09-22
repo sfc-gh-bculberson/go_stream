@@ -13,20 +13,20 @@ env:
   PIPE: ${PIPE}
   PAT: ${PAT}
   GZIP: ${GZIP}
-  
+
 container:
-  eps: 16000
-  batch: 1000
+  eps: 20000
+  batch: 4000
   count: 0
-  buffer: 1000
+  buffer: 4000
 
 resources:
   limits:
-    cpu: 4000m
-    memory: 8000Mi
+    cpu: 1000m
+    memory: 2000Mi
   requests:
-    cpu: 4000m
-    memory: 8000Mi
+    cpu: 500m
+    memory: 1000Mi
 
 serviceAccount:
   create: true
@@ -41,4 +41,3 @@ affinity:
               operator: In
               values:
                 - ssv2test
-

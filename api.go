@@ -44,6 +44,7 @@ type openChannelResponse struct {
 }
 
 func resolveIngestHost(ctx context.Context, client *http.Client, account, patToken string) (string, error) {
+	//controlHost := account + ".us-west-2.privatelink.snowflakecomputing.com"
 	controlHost := account + ".snowflakecomputing.com"
 	controlURL := "https://" + controlHost + "/v2/streaming/hostname"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, controlURL, nil)
@@ -95,6 +96,7 @@ func openChannel(ctx context.Context, client *http.Client, patToken, ingestHost,
 	req.Header.Set("Accept", "application/json")
 	resp, err := client.Do(req)
 	if err != nil {
+		fmt.Println("Error with request:", err)
 		return oc, "", "", err
 	}
 	body, _ := io.ReadAll(resp.Body)
@@ -132,7 +134,7 @@ func appendRows(ctx context.Context, client *http.Client, patToken, rowsURL, con
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bodyReader)
 	if err != nil {
-		return "", 0, nil, 0, err
+		return "", -1, nil, 0, err
 	}
 	req.Header.Set("Authorization", "Bearer "+patToken)
 	req.Header.Set("X-Snowflake-Authorization-Token-Type", "PROGRAMMATIC_ACCESS_TOKEN")
@@ -143,7 +145,7 @@ func appendRows(ctx context.Context, client *http.Client, patToken, rowsURL, con
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", 0, nil, compressedLen, err
+		return "", -2, nil, compressedLen, err
 	}
 	defer resp.Body.Close()
 	respBody, _ = io.ReadAll(resp.Body)
