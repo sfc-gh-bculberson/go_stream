@@ -192,8 +192,8 @@ func main() {
 						}
 					}
 					log.Printf("status channel=%s code=%s rows_inserted=%d rows_parsed=%d rows_errors=%d last_commit=%s latency_ms=%d lag_ms=%d", cs.ChannelName, cs.ChannelStatusCode, cs.RowsInserted, cs.RowsParsed, cs.RowsErrors, cs.LastCommittedOffsetToken, cs.SnowflakeAvgProcessingLatencyMs, lagMs)
-					if cs.ChannelStatusCode == "ERR_CHANNEL_MUST_BE_REOPENED_DUE_TO_ROW_SEQ_GAP" || cs.ChannelStatusCode == "ERR_CHANNEL_HAS_INVALID_ROW_SEQUENCER" || cs.ChannelStatusCode == "ERR_CHANNEL_MUST_BE_REOPENED" {
-						log.Printf("status channel=%s has invalid row sequencer -- reopening channel", chanName)
+					if cs.ChannelStatusCode != "SUCCESS" {
+						log.Printf("status channel=%s is in err state -- reopening channel", chanName)
 						reopenBackoff := 1 * time.Second
 						rngReopen := rand.New(rand.NewSource(time.Now().UnixNano()))
 						for {
