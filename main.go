@@ -168,9 +168,9 @@ func main() {
 	}
 	log.Printf("channel opened, continuationToken=%s", continuationToken)
 
-	// Monitor goroutine: poll bulk-channel-status every 15s
+	// Monitor goroutine: poll bulk-channel-status every 1m
 	go func() {
-		ticker := time.NewTicker(15 * time.Second)
+		ticker := time.NewTicker(60 * time.Second)
 		defer ticker.Stop()
 		for {
 			select {
