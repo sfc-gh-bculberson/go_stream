@@ -194,12 +194,29 @@ func main() {
 					log.Printf("status channel=%s code=%s rows_inserted=%d rows_parsed=%d rows_errors=%d last_commit=%s latency_ms=%d lag_ms=%d", cs.ChannelName, cs.ChannelStatusCode, cs.RowsInserted, cs.RowsParsed, cs.RowsErrors, cs.LastCommittedOffsetToken, cs.SnowflakeAvgProcessingLatencyMs, lagMs)
 					if cs.ChannelStatusCode == "ERR_CHANNEL_HAS_INVALID_ROW_SEQUENCER" {
 						log.Printf("status channel=%s has invalid row sequencer -- reopening channel", chanName)
-						oc2, _, _, e := openChannel(ctx, client, patToken, ingestHost, databaseName, schemaName, pipeName, chanName)
-						if e != nil {
-							log.Printf("reopen channel failed: %v", e)
-						} else {
-							continuationToken = oc2.NextContinuationToken
-							log.Printf("reopened channel=%s", chanName)
+						reopenBackoff := 1 * time.Second
+						rngReopen := rand.New(rand.NewSource(time.Now().UnixNano()))
+						for {
+							if ctx.Err() != nil {
+								log.Printf("reopen aborted: context cancelled")
+								break
+							}
+							oc2, _, _, e := openChannel(ctx, client, patToken, ingestHost, databaseName, schemaName, pipeName, chanName)
+							if e == nil {
+								continuationToken = oc2.NextContinuationToken
+								log.Printf("reopened channel=%s", chanName)
+								break
+							}
+							log.Printf("reopen channel failed: %v -- retrying", e)
+							sleep := time.Duration((0.5 + rngReopen.Float64()) * float64(reopenBackoff))
+							if sleep > maxBackoff {
+								sleep = maxBackoff
+							}
+							time.Sleep(sleep)
+							reopenBackoff *= 2
+							if reopenBackoff > maxBackoff {
+								reopenBackoff = maxBackoff
+							}
 						}
 					}
 				} else {
