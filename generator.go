@@ -2,6 +2,8 @@ package main
 
 import (
 	"encoding/hex"
+	"encoding/json"
+	"fmt"
 	"strings"
 	"time"
 
@@ -34,6 +36,31 @@ type LiftTicket struct {
 	Phone            *string           `json:"PHONE"`
 	Email            *string           `json:"EMAIL"`
 	EmergencyContact *EmergencyContact `json:"EMERGENCY_CONTACT"`
+	// Extras are additional top-level columns merged during JSON marshaling
+	Extras map[string]any `json:"-"`
+}
+
+// MarshalJSON flattens core fields with Extras so additional columns become top-level keys.
+func (lt LiftTicket) MarshalJSON() ([]byte, error) {
+	m := map[string]any{
+		"TXID":              lt.TxID,
+		"RFID":              lt.RFID,
+		"RESORT":            lt.Resort,
+		"PURCHASE_TIME":     lt.PurchaseTime,
+		"EXPIRATION_TIME":   lt.ExpirationTime,
+		"DAYS":              lt.Days,
+		"NAME":              lt.Name,
+		"ADDRESS":           lt.Address,
+		"PHONE":             lt.Phone,
+		"EMAIL":             lt.Email,
+		"EMERGENCY_CONTACT": lt.EmergencyContact,
+	}
+	if lt.Extras != nil {
+		for k, v := range lt.Extras {
+			m[k] = v
+		}
+	}
+	return json.Marshal(m)
 }
 
 func generateLiftTicket() LiftTicket {
@@ -95,6 +122,9 @@ func generateLiftTicket() LiftTicket {
 		emergency = &EmergencyContact{Name: strings.TrimSpace(ep.First + " " + ep.Last), Phone: faker.Phonenumber()}
 	}
 
+	// Generate large sets of additional columns
+	extras := generateExtraColumns()
+
 	return LiftTicket{
 		TxID:             uuid.NewString(),
 		RFID:             "0x" + randomHexFast(12),
@@ -107,6 +137,7 @@ func generateLiftTicket() LiftTicket {
 		Phone:            phone,
 		Email:            email,
 		EmergencyContact: emergency,
+		Extras:           extras,
 	}
 }
 
@@ -139,4 +170,59 @@ func fastIntn(n int) int {
 
 func fastFloat64() float64 {
 	return float64(fastrand.Uint32()) / 4294967295.0
+}
+
+// generateExtraColumns creates:
+// - 10 variant columns: VARIANT_01..VARIANT_10
+// - 500 varchar columns: VCHAR_0001..VCHAR_0500
+// - 500 numeric columns: NUM_0001..NUM_0500
+func generateExtraColumns() map[string]any {
+	extras := make(map[string]any, 10+500+500)
+
+	// 10 VARIANT columns with small nested JSON objects
+	for i := 1; i <= 10; i++ {
+		key := fmt.Sprintf("VARIANT_%02d", i)
+		// Create a small mixed-type object
+		variant := map[string]any{
+			"J": randomHexFast(6),
+			"K": randomHexFast(6),
+			"L": randomHexFast(6),
+			"M": randomHexFast(6),
+			"N": int(fastrand.Uint32() % 1_000_000),
+			"O": int(fastrand.Uint32() % 1_000_000),
+			"P": int(fastrand.Uint32() % 1_000_000),
+			"Q": int(fastrand.Uint32() % 1_000_000),
+			"B": (fastrand.Uint32()%2 == 0),
+			"C": (fastrand.Uint32()%2 == 0),
+			"D": (fastrand.Uint32()%2 == 0),
+			"E": (fastrand.Uint32()%2 == 0),
+		}
+		// Occasionally add a nested object
+		if fastFloat64() < 0.3 {
+			variant["NESTED"] = map[string]any{
+				"A": randomHexFast(4),
+				"B": randomHexFast(4),
+				"Y": int(fastrand.Uint32() % 10_000),
+				"Z": int(fastrand.Uint32() % 10_000),
+			}
+		}
+		extras[key] = variant
+	}
+
+	// 500 VARCHAR columns with random-length hex strings
+	for i := 1; i <= 500; i++ {
+		key := fmt.Sprintf("VCHAR_%04d", i)
+		// Length between 6 and 24 bytes -> 12 to 48 hex chars
+		n := 6 + fastIntn(19)
+		extras[key] = randomHexFast(n)
+	}
+
+	// 500 NUMERIC columns with random integers
+	for i := 1; i <= 500; i++ {
+		key := fmt.Sprintf("NUM_%04d", i)
+		// Random up to ~1 billion
+		extras[key] = int(fastrand.Uint32() % 1_000_000_000)
+	}
+
+	return extras
 }
