@@ -123,7 +123,9 @@ func main() {
 	var ingestHost string
 	for {
 		var err error
-		ingestHost, err = resolveIngestHost(ctx, client, account, patToken)
+		attemptCtx, cancelAttempt := context.WithTimeout(ctx, 30*time.Second)
+		ingestHost, err = resolveIngestHost(attemptCtx, client, account, patToken)
+		cancelAttempt()
 		if err == nil {
 			break
 		}
@@ -148,7 +150,9 @@ func main() {
 	var rowsURL string
 	var continuationToken string
 	for {
-		oc2, cu, ru, err := openChannel(ctx, client, patToken, ingestHost, databaseName, schemaName, pipeName, chanName)
+		attemptCtx, cancelAttempt := context.WithTimeout(ctx, 30*time.Second)
+		oc2, cu, ru, err := openChannel(attemptCtx, client, patToken, ingestHost, databaseName, schemaName, pipeName, chanName)
+		cancelAttempt()
 		if err == nil {
 			channelURL = cu
 			rowsURL = ru
@@ -201,7 +205,9 @@ func main() {
 								log.Printf("reopen aborted: context cancelled")
 								break
 							}
-							oc2, _, _, e := openChannel(ctx, client, patToken, ingestHost, databaseName, schemaName, pipeName, chanName)
+							attemptCtx, cancelAttempt := context.WithTimeout(ctx, 30*time.Second)
+							oc2, _, _, e := openChannel(attemptCtx, client, patToken, ingestHost, databaseName, schemaName, pipeName, chanName)
+							cancelAttempt()
 							if e == nil {
 								continuationToken = oc2.NextContinuationToken
 								log.Printf("reopened channel=%s", chanName)
@@ -257,12 +263,14 @@ func main() {
 			bodyStr := sb.String()
 			nowMs := time.Now().UnixMilli()
 			rowsCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-			defer cancel()
 			nextCT, status, _, compressedLen, err := appendRows(rowsCtx, rowsClient, patToken, rowsURL, continuationToken, nowMs, uuid.NewString(), []byte(bodyStr), useGzip)
+			cancel()
 			if err != nil {
 				if status == 400 {
 					log.Printf("rows POST error: status=%d err=%v -- reopening channel", status, err)
-					oc2, _, _, e := openChannel(ctx, client, patToken, ingestHost, databaseName, schemaName, pipeName, chanName)
+					rowsReopenCtx, cancelReopen := context.WithTimeout(ctx, 30*time.Second)
+					oc2, _, _, e := openChannel(rowsReopenCtx, client, patToken, ingestHost, databaseName, schemaName, pipeName, chanName)
+					cancelReopen()
 					if e != nil {
 						log.Printf("reopen channel failed: %v", e)
 						return
@@ -274,7 +282,9 @@ func main() {
 				log.Printf("rows POST error: status=%d err=%v -- retrying", status, err)
 				rowsBackoff := 1
 				for {
-					nextCT, status, _, compressedLen, err = appendRows(rowsCtx, rowsClient, patToken, rowsURL, continuationToken, nowMs, uuid.NewString(), []byte(bodyStr), useGzip)
+					rowsCtxAttempt, cancelAttempt := context.WithTimeout(context.Background(), 60*time.Second)
+					nextCT, status, _, compressedLen, err = appendRows(rowsCtxAttempt, rowsClient, patToken, rowsURL, continuationToken, nowMs, uuid.NewString(), []byte(bodyStr), useGzip)
+					cancelAttempt()
 					if err == nil {
 						break
 					}
