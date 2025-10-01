@@ -15,10 +15,10 @@ env:
   GZIP: ${GZIP}
 
 container:
-  eps: 20000
-  batch: 4000
+  eps: 50
+  batch: 10
   count: 0
-  buffer: 4000
+  buffer: 10
 
 resources:
   limits:

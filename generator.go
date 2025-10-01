@@ -188,10 +188,10 @@ func generateExtraColumns() map[string]any {
 			"K": randomHexFast(6),
 			"L": randomHexFast(6),
 			"M": randomHexFast(6),
-			"N": int(fastrand.Uint32() % 1_000_000),
-			"O": int(fastrand.Uint32() % 1_000_000),
-			"P": int(fastrand.Uint32() % 1_000_000),
-			"Q": int(fastrand.Uint32() % 1_000_000),
+			"N": int(fastrand.Uint32() % 1_000),
+			"O": int(fastrand.Uint32() % 500),
+			"P": int(fastrand.Uint32() % 200),
+			"Q": int(fastrand.Uint32() % 100),
 			"B": (fastrand.Uint32()%2 == 0),
 			"C": (fastrand.Uint32()%2 == 0),
 			"D": (fastrand.Uint32()%2 == 0),
@@ -202,8 +202,8 @@ func generateExtraColumns() map[string]any {
 			variant["NESTED"] = map[string]any{
 				"A": randomHexFast(4),
 				"B": randomHexFast(4),
-				"Y": int(fastrand.Uint32() % 10_000),
-				"Z": int(fastrand.Uint32() % 10_000),
+				"Y": int(fastrand.Uint32() % 1_000),
+				"Z": int(fastrand.Uint32() % 500),
 			}
 		}
 		extras[key] = variant
@@ -220,8 +220,8 @@ func generateExtraColumns() map[string]any {
 	// 500 NUMERIC columns with random integers
 	for i := 1; i <= 500; i++ {
 		key := fmt.Sprintf("NUM_%04d", i)
-		// Random up to ~1 billion
-		extras[key] = int(fastrand.Uint32() % 1_000_000_000)
+		// Random up to ~100k
+		extras[key] = int(fastrand.Uint32() % 100_000)
 	}
 
 	return extras
