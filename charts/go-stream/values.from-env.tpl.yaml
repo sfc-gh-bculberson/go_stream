@@ -15,7 +15,7 @@ env:
   GZIP: ${GZIP}
 
 container:
-  eps: 50
+  eps: 60
   batch: 10
   count: 0
   buffer: 10
