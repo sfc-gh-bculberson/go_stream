@@ -134,7 +134,7 @@ func appendRows(ctx context.Context, client *http.Client, patToken, rowsURL, con
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bodyReader)
 	if err != nil {
-		return "", -1, nil, 0, "", err
+		return "", -1, nil, 0, sessionHeader, err
 	}
 	req.Header.Set("Authorization", "Bearer "+patToken)
 	req.Header.Set("X-Snowflake-Authorization-Token-Type", "PROGRAMMATIC_ACCESS_TOKEN")
@@ -148,7 +148,7 @@ func appendRows(ctx context.Context, client *http.Client, patToken, rowsURL, con
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", -2, nil, compressedLen, "", err
+		return "", -2, nil, compressedLen, sessionHeader, err
 	}
 	defer resp.Body.Close()
 	respBody, _ = io.ReadAll(resp.Body)
