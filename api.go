@@ -112,7 +112,7 @@ func openChannel(ctx context.Context, client *http.Client, patToken, ingestHost,
 	return oc, chURL, rowsURL, nil
 }
 
-func appendRows(ctx context.Context, client *http.Client, patToken, rowsURL, continuationToken string, offsetTokenMs int64, requestId string, ndjson []byte, useGzip bool) (nextContinuation string, statusCode int, respBody []byte, compressedLen int, err error) {
+func appendRows(ctx context.Context, client *http.Client, patToken, rowsURL, continuationToken string, offsetTokenMs int64, requestId string, ndjson []byte, useGzip bool, sessionHeader string) (nextContinuation string, statusCode int, respBody []byte, compressedLen int, sessionHeaderOut string, err error) {
 	endpoint := rowsURL + "?continuationToken=" + url.QueryEscape(continuationToken)
 	if offsetTokenMs > 0 {
 		endpoint += "&offsetToken=" + fmt.Sprintf("%d", offsetTokenMs)
@@ -134,31 +134,35 @@ func appendRows(ctx context.Context, client *http.Client, patToken, rowsURL, con
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bodyReader)
 	if err != nil {
-		return "", -1, nil, 0, err
+		return "", -1, nil, 0, "", err
 	}
 	req.Header.Set("Authorization", "Bearer "+patToken)
 	req.Header.Set("X-Snowflake-Authorization-Token-Type", "PROGRAMMATIC_ACCESS_TOKEN")
 	req.Header.Set("Content-Type", "application/x-ndjson")
 	req.Header.Set("Accept", "application/json")
+	if sessionHeader != "" {
+		req.Header.Set("x-snowflake-session", sessionHeader)
+	}
 	if useGzip {
 		req.Header.Set("Content-Encoding", "gzip")
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", -2, nil, compressedLen, err
+		return "", -2, nil, compressedLen, "", err
 	}
 	defer resp.Body.Close()
 	respBody, _ = io.ReadAll(resp.Body)
 	statusCode = resp.StatusCode
+	sessionHeaderOut = resp.Header.Get("x-snowflake-session")
 	if statusCode >= 200 && statusCode < 300 {
 		var rr struct {
 			NextContinuationToken string `json:"next_continuation_token"`
 		}
 		_ = json.Unmarshal(respBody, &rr)
 		nextContinuation = rr.NextContinuationToken
-		return nextContinuation, statusCode, respBody, compressedLen, nil
+		return nextContinuation, statusCode, respBody, compressedLen, sessionHeaderOut, nil
 	}
-	return "", statusCode, respBody, compressedLen, fmt.Errorf("rows non-2xx: %d", statusCode)
+	return "", statusCode, respBody, compressedLen, sessionHeaderOut, fmt.Errorf("rows non-2xx: %d", statusCode)
 }
 
 func bulkChannelStatus(ctx context.Context, client *http.Client, patToken, ingestHost, database, schema, pipe string, channelNames []string) (bulkStatusResponse, int, []byte, error) {

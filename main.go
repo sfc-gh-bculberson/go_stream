@@ -149,6 +149,7 @@ func main() {
 	var channelURL string
 	var rowsURL string
 	var continuationToken string
+	var sessionHeader string
 	for {
 		attemptCtx, cancelAttempt := context.WithTimeout(ctx, 30*time.Second)
 		oc2, cu, ru, err := openChannel(attemptCtx, client, patToken, ingestHost, databaseName, schemaName, pipeName, chanName)
@@ -252,6 +253,10 @@ func main() {
 		var totalUncompressedBytesSent int64 // raw (uncompressed) bytes
 		rng := rand.New(rand.NewSource(time.Now().UnixNano()))
 		flush := func() {
+			var nextCT string
+			var status int
+			var compressedLen int
+			var err error
 			if len(batch) == 0 {
 				return
 			}
@@ -263,7 +268,7 @@ func main() {
 			bodyStr := sb.String()
 			nowMs := time.Now().UnixMilli()
 			rowsCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-			nextCT, status, _, compressedLen, err := appendRows(rowsCtx, rowsClient, patToken, rowsURL, continuationToken, nowMs, uuid.NewString(), []byte(bodyStr), useGzip)
+			nextCT, status, _, compressedLen, sessionHeader, err = appendRows(rowsCtx, rowsClient, patToken, rowsURL, continuationToken, nowMs, uuid.NewString(), []byte(bodyStr), useGzip, sessionHeader)
 			cancel()
 			if err != nil {
 				if status == 400 {
@@ -283,7 +288,7 @@ func main() {
 				rowsBackoff := 1
 				for {
 					rowsCtxAttempt, cancelAttempt := context.WithTimeout(context.Background(), 60*time.Second)
-					nextCT, status, _, compressedLen, err = appendRows(rowsCtxAttempt, rowsClient, patToken, rowsURL, continuationToken, nowMs, uuid.NewString(), []byte(bodyStr), useGzip)
+					nextCT, status, _, compressedLen, sessionHeader, err = appendRows(rowsCtxAttempt, rowsClient, patToken, rowsURL, continuationToken, nowMs, uuid.NewString(), []byte(bodyStr), useGzip, sessionHeader)
 					cancelAttempt()
 					if err == nil {
 						break
