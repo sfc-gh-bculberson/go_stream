@@ -140,11 +140,9 @@ func appendRows(ctx context.Context, client *http.Client, patToken, rowsURL, con
 	req.Header.Set("X-Snowflake-Authorization-Token-Type", "PROGRAMMATIC_ACCESS_TOKEN")
 	req.Header.Set("Content-Type", "application/x-ndjson")
 	req.Header.Set("Accept", "application/json")
-	/*
-		if sessionHeader != "" {
-			req.Header.Set("x-snowflake-session", sessionHeader)
-		}
-	*/
+	if sessionHeader != "" {
+		req.Header.Set("x-snowflake-session", sessionHeader)
+	}
 	if useGzip {
 		req.Header.Set("Content-Encoding", "gzip")
 	}
